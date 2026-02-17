@@ -11,6 +11,10 @@
     <!-- 2. Load Babel -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
+    <!-- 3. Load PDF Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
     <style>
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: #f1f5f9; }
@@ -25,20 +29,26 @@
         .animate-alert {
             animation: flash-red 2s infinite;
         }
+        
+        /* Hide during print/capture if needed */
+        .no-print {
+            display: block;
+        }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-800 antialiased overflow-hidden">
     <div id="root"></div>
 
     <script type="text/babel" data-type="module">
-        import React, { useState, useMemo, useEffect } from 'https://esm.sh/react@18.2.0';
+        import React, { useState, useMemo, useEffect, useRef } from 'https://esm.sh/react@18.2.0';
         import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client';
         import { 
             ZoomIn, ZoomOut, Plus, Calendar as CalendarIcon, User, 
             CheckCircle, Clock, AlertCircle, X, Trash2, Search, 
             ChevronLeft, ChevronRight, Lock, Unlock, BarChart3, 
             Paperclip, FileText, LogOut, ShieldCheck, Eye, Download, Link,
-            CheckSquare, Square, ArrowRight, ExternalLink, Flag, PlayCircle, Check, AlertTriangle
+            CheckSquare, Square, ArrowRight, ExternalLink, Flag, PlayCircle, Check, AlertTriangle, CalendarDays,
+            Printer, FileDown
         } from 'https://esm.sh/lucide-react@0.292.0';
 
         // --- Constants ---
@@ -104,7 +114,7 @@
             const [currentUser, setCurrentUser] = useState(null);
             const isAdmin = !!currentUser;
             
-            // Updated Data Structure with completedBy array
+            // Task Data
             const [tasks, setTasks] = useState([
                 {
                     id: 1,
@@ -112,9 +122,10 @@
                     endDate: '2026-01-15',
                     title: 'Q1 Strategy Meeting',
                     pic: ['Hilmy', 'Nadiah'], 
-                    completedBy: ['Hilmy', 'Nadiah'], // Both done
+                    completedBy: ['Hilmy', 'Nadiah'], 
                     description: 'Discuss roadmap for 2026.',
-                    attachments: []
+                    attachments: [],
+                    timestamp: new Date('2026-01-14T09:00:00').toISOString()
                 },
                 {
                     id: 2,
@@ -122,9 +133,10 @@
                     endDate: '2026-02-12', 
                     title: 'Launch Campaign',
                     pic: ['Nadiah'],
-                    completedBy: [], // Not done
+                    completedBy: [], 
                     description: 'Social media blast.',
-                    attachments: [{ name: 'Campaign Brief', url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf' }]
+                    attachments: [{ name: 'Campaign Brief', url: '#' }],
+                    timestamp: new Date('2026-02-09T14:30:00').toISOString()
                 },
                 {
                     id: 3,
@@ -132,9 +144,10 @@
                     endDate: '2026-02-18',
                     title: 'Site Visit KL',
                     pic: ['Hasbalah', 'Asmawi', 'Hilmy'],
-                    completedBy: ['Hasbalah'], // Partially done
+                    completedBy: ['Hasbalah'], 
                     description: 'Check new branch location.',
-                    attachments: []
+                    attachments: [],
+                    timestamp: new Date('2026-02-15T10:15:00').toISOString()
                 },
                 {
                     id: 4,
@@ -144,13 +157,18 @@
                     pic: ['Fateha'],
                     completedBy: [],
                     description: 'This should show as overdue.',
-                    attachments: []
+                    attachments: [],
+                    timestamp: new Date('2026-01-01T08:00:00').toISOString()
                 }
             ]);
             
+            // UI State
             const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
             const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
             const [isTeamStatsOpen, setIsTeamStatsOpen] = useState(false);
+            const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
+            const [isDownloading, setIsDownloading] = useState(false);
+            const [downloadStatus, setDownloadStatus] = useState('');
             
             const [selectedTask, setSelectedTask] = useState(null);
             const [selectedDate, setSelectedDate] = useState(null); 
@@ -164,11 +182,9 @@
                 
                 if (isFullyComplete) return 'completed';
                 if (today > task.endDate) return 'overdue';
-                if (today >= task.startDate) return 'started';
-                return 'pending';
+                if (today < task.startDate) return 'future'; 
+                return 'pending'; // Active / In Progress
             };
-
-            const isPicComplete = (task, picName) => task.completedBy.includes(picName);
 
             // Computed
             const calendarDays = useMemo(() => {
@@ -177,7 +193,6 @@
                 const days = [];
                 const todayKey = getTodayKey();
 
-                // Logic: Tasks that are NOT fully complete and EndDate < Today are overdue
                 const overdueTasks = tasks.filter(t => {
                     const isFullyComplete = t.pic.every(p => t.completedBy.includes(p));
                     return t.endDate < todayKey && !isFullyComplete;
@@ -190,10 +205,8 @@
                 for (let i = 1; i <= daysInMonth; i++) {
                     const dateKey = formatDateKey(currentYear, currentMonth, i);
                     
-                    // Filter tasks that COVER this day
                     let dayTasks = tasks.filter(t => dateKey >= t.startDate && dateKey <= t.endDate);
 
-                    // Add carried forward tasks to 'Today'
                     if (dateKey === todayKey) {
                         const carried = overdueTasks.map(t => ({ ...t, isCarried: true }));
                         const existingIds = new Set(dayTasks.map(t => t.id));
@@ -214,16 +227,17 @@
 
             const stats = useMemo(() => {
                 const total = tasks.length;
-                let completed = 0, pending = 0, inProgress = 0;
+                let completed = 0, future = 0, pending = 0, overdue = 0;
                 
                 tasks.forEach(t => {
                     const status = getTaskStatus(t);
                     if (status === 'completed') completed++;
-                    else if (status === 'pending') pending++;
-                    else inProgress++; // started or overdue counts as active work
+                    else if (status === 'future') future++;
+                    else if (status === 'overdue') overdue++;
+                    else pending++; 
                 });
 
-                return { total, completed, pending, inProgress };
+                return { total, completed, future, pending, overdue };
             }, [tasks]);
 
             // Actions
@@ -241,7 +255,7 @@
             const handleTaskClick = (e, task, dateKey) => {
                 e.stopPropagation();
                 setSelectedTask(task);
-                setSelectedDate(dateKey); // Capture the clicked date context for delete logic
+                setSelectedDate(dateKey); 
                 setIsTaskModalOpen(true);
             };
 
@@ -262,6 +276,8 @@
 
             const saveTask = (taskData) => {
                 const { isCarried, ...cleanTask } = taskData;
+                cleanTask.timestamp = new Date().toISOString();
+
                 if (!cleanTask.completedBy) cleanTask.completedBy = [];
                 if (cleanTask.endDate < cleanTask.startDate) cleanTask.endDate = cleanTask.startDate;
 
@@ -274,17 +290,14 @@
             };
 
             const deleteTask = (id, mode) => {
-                // If mode is 'all', just delete it
                 if (mode === 'all') {
                     setTasks(prev => prev.filter(t => t.id !== id));
                     setIsTaskModalOpen(false);
                     return;
                 }
-
-                // If mode is 'single', we need valid selectedDate
+                
                 if (!selectedDate) {
-                    // Safety fallback
-                    setTasks(prev => prev.filter(t => t.id !== id));
+                    setTasks(prev => prev.filter(t => t.id !== id)); // Fallback
                     setIsTaskModalOpen(false);
                     return;
                 }
@@ -296,40 +309,24 @@
                     const task = prev[taskIndex];
                     const dateToDelete = selectedDate;
 
-                    // Safety check: if date is outside range (e.g. carried forward task clicked on today), we can't split.
-                    // In this case, we act as 'delete all' or do nothing.
-                    // The UI should hide "Remove Day" for carried tasks, but safety here:
-                    if (dateToDelete < task.startDate || dateToDelete > task.endDate) {
-                         return prev.filter(t => t.id !== id);
-                    }
-
-                    // Case 1: Single Day Task -> Delete
-                    if (task.startDate === task.endDate) {
-                        return prev.filter(t => t.id !== id);
-                    }
-
-                    // Case 2: Clicked Start Date -> Advance Start Date
+                    if (dateToDelete < task.startDate || dateToDelete > task.endDate) return prev.filter(t => t.id !== id);
+                    if (task.startDate === task.endDate) return prev.filter(t => t.id !== id);
+                    
                     if (dateToDelete === task.startDate) {
                         const newStart = addDays(task.startDate, 1);
                         const updatedTask = { ...task, startDate: newStart };
                         return [...prev.slice(0, taskIndex), updatedTask, ...prev.slice(taskIndex + 1)];
                     }
-
-                    // Case 3: Clicked End Date -> Retract End Date
                     if (dateToDelete === task.endDate) {
                         const newEnd = addDays(task.endDate, -1);
                         const updatedTask = { ...task, endDate: newEnd };
                         return [...prev.slice(0, taskIndex), updatedTask, ...prev.slice(taskIndex + 1)];
                     }
-
-                    // Case 4: Clicked Middle Date -> Split into Two Tasks
+                    
                     const endA = addDays(dateToDelete, -1);
                     const startB = addDays(dateToDelete, 1);
-                    
                     const taskA = { ...task, endDate: endA };
-                    // Create new task B with new ID
                     const taskB = { ...task, id: Date.now(), startDate: startB }; 
-
                     return [...prev.slice(0, taskIndex), taskA, taskB, ...prev.slice(taskIndex + 1)];
                 });
                 
@@ -341,6 +338,33 @@
                 setIsLoginModalOpen(false);
             };
 
+            const handleHeaderStatClick = (category) => {
+                let relevantTasks = [];
+                
+                if (category === 'future') {
+                    relevantTasks = tasks.filter(t => getTaskStatus(t) === 'future');
+                    relevantTasks.sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
+                } else if (category === 'pending') {
+                    relevantTasks = tasks.filter(t => getTaskStatus(t) === 'pending');
+                    relevantTasks.sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
+                } else if (category === 'overdue') {
+                    relevantTasks = tasks.filter(t => getTaskStatus(t) === 'overdue');
+                    relevantTasks.sort((a, b) => new Date(a.startDate) - new Date(b.startDate));
+                } else if (category === 'completed') {
+                    relevantTasks = tasks.filter(t => getTaskStatus(t) === 'completed');
+                    relevantTasks.sort((a, b) => new Date(b.endDate) - new Date(a.endDate));
+                }
+
+                if (relevantTasks.length > 0) {
+                    const targetTask = relevantTasks[0];
+                    const targetDate = new Date(targetTask.startDate);
+                    setCurrentYear(targetDate.getFullYear());
+                    setCurrentMonth(targetDate.getMonth());
+                } else {
+                    alert(`No tasks found in "${category}" status.`);
+                }
+            };
+
             const handleNavigateFromStats = (pic, statusCategory) => {
                 const relevantTasks = tasks.filter(t => {
                     const s = getTaskStatus(t);
@@ -348,8 +372,8 @@
                     if (!involved) return false;
                     
                     if (statusCategory === 'completed') return s === 'completed';
-                    if (statusCategory === 'pending') return s === 'pending';
-                    if (statusCategory === 'started') return s === 'started' || s === 'overdue';
+                    if (statusCategory === 'pending') return s === 'future'; 
+                    if (statusCategory === 'started') return s === 'pending' || s === 'overdue';
                     return false;
                 });
 
@@ -368,6 +392,68 @@
                 setCurrentMonth(targetDate.getMonth());
                 setFilterPic(pic);
                 setIsTeamStatsOpen(false);
+            };
+
+            // PDF Generation Logic
+            const generatePDF = async (monthsToPrint) => {
+                setIsDownloading(true);
+                const element = document.getElementById('planner-board');
+                if (!element) return;
+
+                const { jsPDF } = window.jspdf;
+                const pdf = new jsPDF({ orientation: 'landscape', unit: 'px', format: [1600, 1000] }); // Custom broad format
+                
+                // Backup current state
+                const originalMonth = currentMonth;
+                const originalZoom = zoomLevel;
+                setZoomLevel(1); // Force standard zoom for print
+
+                try {
+                    for (let i = 0; i < monthsToPrint.length; i++) {
+                        const mIndex = monthsToPrint[i];
+                        
+                        // Update month and wait for render
+                        setCurrentMonth(mIndex);
+                        setDownloadStatus(`Rendering ${MONTHS[mIndex]}...`);
+                        await new Promise(r => setTimeout(r, 600)); // Wait for DOM update
+
+                        const canvas = await window.html2canvas(element, {
+                            scale: 1.5,
+                            useCORS: true,
+                            logging: false,
+                            windowWidth: 1600
+                        });
+
+                        const imgData = canvas.toDataURL('image/png');
+                        
+                        if (i > 0) pdf.addPage();
+                        
+                        // Add Header Text manually to PDF
+                        pdf.setFontSize(24);
+                        pdf.setTextColor(40);
+                        pdf.text(`${MONTHS[mIndex]} ${currentYear} - Strategic Planner`, 40, 40);
+                        
+                        // Add Image
+                        pdf.addImage(imgData, 'PNG', 40, 60, 1520, 900, undefined, 'FAST');
+                    }
+
+                    setDownloadStatus('Saving...');
+                    const fileName = monthsToPrint.length === 1 
+                        ? `Planner_${currentYear}_${MONTHS[monthsToPrint[0]]}.pdf`
+                        : `Planner_${currentYear}_Full_Report.pdf`;
+                    
+                    pdf.save(fileName);
+
+                } catch (e) {
+                    console.error(e);
+                    alert("Error generating PDF");
+                } finally {
+                    setCurrentMonth(originalMonth);
+                    setZoomLevel(originalZoom);
+                    setIsDownloading(false);
+                    setIsDownloadModalOpen(false);
+                    setDownloadStatus('');
+                }
             };
 
             return (
@@ -398,16 +484,18 @@
                             )}
                         </div>
 
-                        {/* Stats HUD */}
+                        {/* Stats HUD - Clickable */}
                         <div className="flex gap-4 bg-slate-100 p-2 rounded-xl">
                             <button onClick={() => setIsTeamStatsOpen(true)} className="flex flex-col items-center px-4 hover:bg-white rounded-lg transition-colors cursor-pointer group">
                                 <BarChart3 className="w-5 h-5 text-indigo-600 group-hover:scale-110 transition-transform" />
-                                <span className="text-[10px] text-slate-500 font-bold uppercase mt-1">Status</span>
+                                <span className="text-[10px] text-slate-500 font-bold uppercase mt-1">Team</span>
                             </button>
                             <div className="h-8 w-px bg-slate-300 mx-1"></div>
-                            <StatPill label="Pending" value={stats.pending} color="text-amber-600 bg-amber-100" />
-                            <StatPill label="Working" value={stats.inProgress} color="text-blue-600 bg-blue-100" />
-                            <StatPill label="Done" value={stats.completed} color="text-emerald-600 bg-emerald-100" />
+                            
+                            <StatPill label="Future" value={stats.future} color="text-indigo-600 bg-indigo-100" onClick={() => handleHeaderStatClick('future')} />
+                            <StatPill label="Active" value={stats.pending} color="text-amber-600 bg-amber-100" onClick={() => handleHeaderStatClick('pending')} />
+                            <StatPill label="Overdue" value={stats.overdue} color="text-red-600 bg-red-100" onClick={() => handleHeaderStatClick('overdue')} />
+                            <StatPill label="Done" value={stats.completed} color="text-emerald-600 bg-emerald-100" onClick={() => handleHeaderStatClick('completed')} />
                         </div>
 
                         {/* Controls */}
@@ -421,6 +509,15 @@
                                 <option value="All">All Team</option>
                                 {Object.keys(PIC_COLORS).filter(p => p !== 'Admin').map(p => <option key={p} value={p}>{p}</option>)}
                             </select>
+
+                            {/* Download PDF Button */}
+                            <button 
+                                onClick={() => setIsDownloadModalOpen(true)} 
+                                className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg transition-colors flex items-center gap-2"
+                                title="Download PDF Options"
+                            >
+                                <FileDown className="w-4 h-4" />
+                            </button>
 
                             <div className="flex bg-slate-100 rounded-lg p-1 border border-slate-200">
                                 <button onClick={() => handleZoom('out')} className="p-2 hover:bg-white hover:shadow rounded-md transition-all"><ZoomOut className="w-4 h-4 text-slate-600" /></button>
@@ -445,7 +542,7 @@
 
                     {/* Board */}
                     <main className="flex-1 overflow-auto bg-slate-50 relative p-4 cursor-grab active:cursor-grabbing">
-                        <div style={{ transform: `scale(${zoomLevel})`, width: '100%', maxWidth: '1400px', minHeight: '800px', transformOrigin: 'top center' }} className="mx-auto shadow-2xl bg-white rounded-lg overflow-hidden border border-slate-300 transition-transform duration-200">
+                        <div id="planner-board" style={{ transform: `scale(${zoomLevel})`, width: '100%', maxWidth: '1400px', minHeight: '800px', transformOrigin: 'top center' }} className="mx-auto shadow-2xl bg-white rounded-lg overflow-hidden border border-slate-300 transition-transform duration-200">
                             <div className="grid grid-cols-7 bg-slate-100 border-b border-slate-300">
                                 {DAYS.map(day => <div key={day} className="py-3 text-center text-sm font-semibold text-slate-500 uppercase tracking-wider border-r border-slate-200 last:border-r-0">{day}</div>)}
                             </div>
@@ -478,7 +575,6 @@
                                                     const isCarried = task.isCarried;
                                                     const isDelayed = status === 'overdue';
                                                     
-                                                    // Gantt Logic
                                                     const isStart = cell.dateKey === task.startDate;
                                                     const isEnd = cell.dateKey === task.endDate;
                                                     const isMultiDay = task.startDate !== task.endDate;
@@ -489,54 +585,22 @@
                                                         : (isDelayed && !isCarried ? 'bg-red-50 border-red-300' : 'bg-white border-slate-200');
 
                                                     return (
-                                                        <div 
-                                                            key={task.id + (isCarried ? '-carried' : '')} 
-                                                            onClick={(e) => handleTaskClick(e, task, cell.dateKey)} 
-                                                            className={`
-                                                                border p-2 rounded shadow-sm text-xs cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition-all relative overflow-hidden group/task
-                                                                ${barStyle}
-                                                                ${isCarried ? 'bg-red-50 border-red-400 border-dashed opacity-90' : ''}
-                                                                ${status === 'completed' ? 'opacity-60 grayscale' : ''}
-                                                                ${isDelayed ? 'animate-alert' : ''}
-                                                            `}
-                                                        >
-                                                            {/* Indicators */}
+                                                        <div key={task.id + (isCarried ? '-carried' : '')} onClick={(e) => handleTaskClick(e, task, cell.dateKey)} className={`border p-2 rounded shadow-sm text-xs cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition-all relative overflow-hidden group/task ${barStyle} ${isCarried ? 'bg-red-50 border-red-400 border-dashed opacity-90' : ''} ${status === 'completed' ? 'opacity-60 grayscale' : ''} ${isDelayed ? 'animate-alert' : ''}`}>
                                                             {isStart && isMultiDay && <div className="absolute right-1 top-1 text-slate-300"><ArrowRight className="w-3 h-3" /></div>}
                                                             {isEnd && isMultiDay && <div className="absolute left-1 top-1 text-slate-300"><Flag className="w-3 h-3" /></div>}
                                                             {isCarried && <div className="flex items-center gap-1 text-[10px] text-red-600 font-bold mb-1"><AlertTriangle className="w-3 h-3" /> Delayed</div>}
-                                                            
-                                                            {/* PIC Badges with click-to-complete */}
                                                             <div className="flex flex-wrap gap-1 mb-1.5">
                                                                 {(isStart || isEnd || !isMultiDay || isCarried) && task.pic.map(p => {
                                                                     const isDone = task.completedBy.includes(p);
                                                                     const isWaiting = (isDelayed || isCarried) && !isDone;
-                                                                    
-                                                                    return (
-                                                                        <button 
-                                                                            key={p} 
-                                                                            onClick={(e) => togglePicCompletion(e, task, p)}
-                                                                            className={`
-                                                                                px-1.5 py-0.5 rounded text-[10px] font-bold border flex items-center gap-1 transition-all
-                                                                                ${isDone ? 'bg-emerald-100 text-emerald-800 border-emerald-300 ring-1 ring-emerald-400' : (isWaiting ? 'bg-red-100 text-red-800 border-red-300 ring-1 ring-red-400' : (PIC_COLORS[p] || PIC_COLORS['Admin']))}
-                                                                                ${isAdmin ? 'hover:scale-105' : 'cursor-default'}
-                                                                            `}
-                                                                            title={isDone ? 'Completed' : 'Click to mark complete'}
-                                                                        >
-                                                                            {p} {isDone && <Check className="w-2.5 h-2.5" />}
-                                                                        </button>
-                                                                    )
+                                                                    return <button key={p} onClick={(e) => togglePicCompletion(e, task, p)} className={`px-1.5 py-0.5 rounded text-[10px] font-bold border flex items-center gap-1 transition-all ${isDone ? 'bg-emerald-100 text-emerald-800 border-emerald-300 ring-1 ring-emerald-400' : (isWaiting ? 'bg-red-100 text-red-800 border-red-300 ring-1 ring-red-400' : (PIC_COLORS[p] || PIC_COLORS['Admin']))} ${isAdmin ? 'hover:scale-105' : 'cursor-default'}`} title={isDone ? 'Completed' : 'Click to mark complete'}>{p} {isDone && <Check className="w-2.5 h-2.5" />}</button>
                                                                 })}
                                                             </div>
-                                                            
                                                             <div className="flex items-center justify-between mb-1">
-                                                                <div className={`font-medium leading-tight line-clamp-2 ${isBetween ? 'text-slate-400 italic' : 'text-slate-700'}`}>
-                                                                    {isBetween ? '...' : task.title}
-                                                                </div>
-                                                                <div className="flex items-center gap-1 shrink-0 ml-1">
-                                                                    {task.attachments && task.attachments.length > 0 && <Paperclip className="w-3 h-3 text-slate-400" />}
-                                                                </div>
+                                                                <div className={`font-medium leading-tight line-clamp-2 ${isBetween ? 'text-slate-400 italic' : 'text-slate-700'}`}>{isBetween ? '...' : task.title}</div>
+                                                                <div className="flex items-center gap-1 shrink-0 ml-1">{task.attachments && task.attachments.length > 0 && <Paperclip className="w-3 h-3 text-slate-400" />}</div>
                                                             </div>
-                                                            <div className={`h-1 w-full absolute bottom-0 left-0 ${status === 'pending' ? 'bg-amber-400' : ''} ${status === 'started' ? 'bg-blue-400' : ''} ${status === 'completed' ? 'bg-emerald-400' : ''} ${status === 'overdue' ? 'bg-red-500' : ''}`}/>
+                                                            <div className={`h-1 w-full absolute bottom-0 left-0 ${status === 'future' ? 'bg-indigo-400' : ''} ${status === 'pending' ? 'bg-amber-400' : ''} ${status === 'completed' ? 'bg-emerald-400' : ''} ${status === 'overdue' ? 'bg-red-500' : ''}`}/>
                                                         </div>
                                                     );
                                                 })}
@@ -548,21 +612,94 @@
                         </div>
                     </main>
 
+                    {/* Footer */}
+                    <footer className="bg-white border-t border-slate-200 py-2 px-4 text-center">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                            Owner: Bahagian Teknologi Rekabentuk Produk Industri
+                        </p>
+                    </footer>
+
+                    {/* Loading Overlay */}
+                    {isDownloading && (
+                        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/80 backdrop-blur text-white">
+                            <div className="w-12 h-12 border-4 border-white/30 border-t-white rounded-full animate-spin mb-4"></div>
+                            <h3 className="text-xl font-bold">Generating PDF Report</h3>
+                            <p className="text-slate-300 mt-2">{downloadStatus}</p>
+                        </div>
+                    )}
+
                     {/* Modals */}
-                    {isTaskModalOpen && <TaskModal isOpen={isTaskModalOpen} onClose={() => setIsTaskModalOpen(false)} task={selectedTask} date={selectedDate} onSave={saveTask} onDelete={deleteTask} isAdmin={isAdmin} />}
+                    {isTaskModalOpen && <TaskModal isOpen={isTaskModalOpen} onClose={() => setIsTaskModalOpen(false)} task={selectedTask} date={selectedDate} onSave={saveTask} onDelete={deleteTask} isAdmin={isAdmin} getTaskStatus={getTaskStatus} />}
                     {isLoginModalOpen && <LoginModal isOpen={isLoginModalOpen} onClose={() => setIsLoginModalOpen(false)} onLogin={handleLogin} />}
                     {isTeamStatsOpen && <TeamStatusModal isOpen={isTeamStatsOpen} onClose={() => setIsTeamStatsOpen(false)} tasks={tasks} onNavigate={handleNavigateFromStats} getTaskStatus={getTaskStatus} />}
+                    {isDownloadModalOpen && <DownloadModal isOpen={isDownloadModalOpen} onClose={() => setIsDownloadModalOpen(false)} currentMonth={currentMonth} onGenerate={generatePDF} />}
                 </div>
             );
         }
 
         // --- Sub-Components ---
 
-        function StatPill({ label, value, color }) {
+        function StatPill({ label, value, color, onClick }) {
             return (
-                <div className="flex flex-col items-center px-3 border-r border-slate-200 last:border-0 min-w-[70px]">
+                <button onClick={onClick} className="flex flex-col items-center px-3 border-r border-slate-200 last:border-0 min-w-[70px] cursor-pointer hover:bg-slate-200 transition-colors rounded outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-opacity-50">
                     <span className={`text-sm font-bold ${color.split(' ')[0]}`}>{value}</span>
                     <span className="text-[10px] text-slate-500 font-medium uppercase">{label}</span>
+                </button>
+            );
+        }
+
+        function DownloadModal({ isOpen, onClose, currentMonth, onGenerate }) {
+            if (!isOpen) return null;
+            const [selectedMonths, setSelectedMonths] = useState([currentMonth]);
+
+            const toggleMonth = (idx) => {
+                if (selectedMonths.includes(idx)) setSelectedMonths(prev => prev.filter(m => m !== idx));
+                else setSelectedMonths(prev => [...prev, idx].sort((a,b) => a-b));
+            };
+
+            const selectAll = () => setSelectedMonths([0,1,2,3,4,5,6,7,8,9,10,11]);
+            const selectCurrent = () => setSelectedMonths([currentMonth]);
+
+            return (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
+                        <div className="p-6">
+                            <div className="flex justify-between items-center mb-4">
+                                <h3 className="text-xl font-bold text-slate-900 flex items-center gap-2"><FileDown className="w-5 h-5"/> Download PDF Report</h3>
+                                <button onClick={onClose}><X className="w-5 h-5 text-slate-400"/></button>
+                            </div>
+                            
+                            <div className="space-y-4">
+                                <div className="flex gap-2">
+                                    <button onClick={selectCurrent} className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 rounded text-xs font-bold">Current Month</button>
+                                    <button onClick={selectAll} className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 rounded text-xs font-bold">Full Year (12 Pages)</button>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Select Specific Months</label>
+                                    <div className="grid grid-cols-3 gap-2">
+                                        {MONTHS.map((m, idx) => (
+                                            <button 
+                                                key={m} 
+                                                onClick={() => toggleMonth(idx)}
+                                                className={`py-2 rounded text-xs font-medium border transition-colors ${selectedMonths.includes(idx) ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}
+                                            >
+                                                {m}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <button 
+                                    onClick={() => onGenerate(selectedMonths)} 
+                                    disabled={selectedMonths.length === 0}
+                                    className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold shadow-lg shadow-indigo-200 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    Generate PDF ({selectedMonths.length} pages)
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             );
         }
@@ -610,14 +747,12 @@
             const picList = Object.keys(PIC_COLORS).filter(p => p !== 'Admin');
             
             const picStats = picList.map(pic => {
-                // Filter tasks involving this PIC
                 const picTasks = tasks.filter(t => t.pic.includes(pic));
-                
                 return {
                     name: pic,
                     total: picTasks.length,
-                    pending: picTasks.filter(t => getTaskStatus(t) === 'pending').length,
-                    started: picTasks.filter(t => getTaskStatus(t) === 'started' || getTaskStatus(t) === 'overdue').length,
+                    pending: picTasks.filter(t => getTaskStatus(t) === 'future').length,
+                    started: picTasks.filter(t => getTaskStatus(t) === 'pending' || getTaskStatus(t) === 'overdue').length,
                     completed: picTasks.filter(t => getTaskStatus(t) === 'completed').length 
                 };
             });
@@ -644,10 +779,10 @@
                                             <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden flex">
                                                 <div style={{ width: `${(stat.completed / (stat.total || 1)) * 100}%` }} className="bg-emerald-500 h-full"></div>
                                                 <div style={{ width: `${(stat.started / (stat.total || 1)) * 100}%` }} className="bg-blue-500 h-full"></div>
-                                                <div style={{ width: `${(stat.pending / (stat.total || 1)) * 100}%` }} className="bg-amber-400 h-full"></div>
+                                                <div style={{ width: `${(stat.pending / (stat.total || 1)) * 100}%` }} className="bg-indigo-400 h-full"></div>
                                             </div>
                                             <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                                                <div onClick={() => onNavigate(stat.name, 'pending')} className="bg-amber-50 p-2 rounded text-amber-700 font-medium cursor-pointer hover:bg-amber-100 transition-colors group"><strong>{stat.pending}</strong> Pending <span className="hidden group-hover:inline">→</span></div>
+                                                <div onClick={() => onNavigate(stat.name, 'pending')} className="bg-indigo-50 p-2 rounded text-indigo-700 font-medium cursor-pointer hover:bg-indigo-100 transition-colors group"><strong>{stat.pending}</strong> Future <span className="hidden group-hover:inline">→</span></div>
                                                 <div onClick={() => onNavigate(stat.name, 'started')} className="bg-blue-50 p-2 rounded text-blue-700 font-medium cursor-pointer hover:bg-blue-100 transition-colors group"><strong>{stat.started}</strong> Active <span className="hidden group-hover:inline">→</span></div>
                                                 <div onClick={() => onNavigate(stat.name, 'completed')} className="bg-emerald-50 p-2 rounded text-emerald-700 font-medium cursor-pointer hover:bg-emerald-100 transition-colors group"><strong>{stat.completed}</strong> Done <span className="hidden group-hover:inline">→</span></div>
                                             </div>
@@ -661,8 +796,7 @@
             );
         }
 
-        function TaskModal({ isOpen, onClose, task, date, onSave, onDelete, isAdmin }) {
-            // Initial state handles both new tasks and editing existing ones
+        function TaskModal({ isOpen, onClose, task, date, onSave, onDelete, isAdmin, getTaskStatus }) {
             const [formData, setFormData] = useState({ 
                 title: '', 
                 pic: [], 
@@ -711,7 +845,6 @@
                 setFormData(prev => {
                     const current = prev.pic;
                     if (current.includes(pic)) {
-                        // Remove pic and also remove from completedBy if present
                         return { 
                             ...prev, 
                             pic: current.filter(p => p !== pic),
@@ -735,16 +868,23 @@
                 });
             };
 
+            const handleSingleDelete = (e) => {
+                e.preventDefault(); // Stop form submit
+                e.stopPropagation();
+                if(confirm(`Remove only this specific day from the schedule?`)) onDelete(task.id, 'single');
+            };
+
+            const handleFullDelete = (e) => {
+                e.preventDefault(); // Stop form submit
+                e.stopPropagation();
+                if(confirm('Delete entire task and all its dates?')) onDelete(task.id, 'all');
+            };
+
             if (!isOpen) return null;
 
-            // Determine if we can show "Remove Day"
-            // We can only remove a specific day if:
-            // 1. Task exists (editing, not creating)
-            // 2. Task is multi-day (start != end)
-            // 3. The date clicked is NOT outside the range (safety, though handled in logic)
-            // 4. It is NOT a carried forward task (visual duplicate on Today)
             const isCarried = task?.isCarried;
             const canRemoveDay = task && !isCarried && formData.startDate !== formData.endDate;
+            const currentStatus = task ? getTaskStatus(formData) : 'future'; 
 
             return (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -778,6 +918,17 @@
                             </div>
                             
                             <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Current Status (Auto)</label>
+                                <div className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-bold capitalize 
+                                    ${currentStatus === 'completed' ? 'bg-emerald-100 text-emerald-800' : 
+                                      currentStatus === 'future' ? 'bg-indigo-100 text-indigo-800' :
+                                      currentStatus === 'overdue' ? 'bg-red-100 text-red-800' : 
+                                      'bg-blue-100 text-blue-800'}`}>
+                                    {currentStatus}
+                                </div>
+                            </div>
+                            
+                            <div>
                                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">PIC (Assign & Complete)</label>
                                 <div className="flex flex-col gap-2">
                                     {Object.keys(PIC_COLORS).filter(p => p !== 'Admin').map(role => {
@@ -787,26 +938,13 @@
                                         return (
                                             <div key={role} className="flex items-center justify-between p-2 rounded border border-slate-100 hover:bg-slate-50">
                                                 <div className="flex items-center gap-3">
-                                                    {/* Assignment Toggle */}
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => togglePic(role)}
-                                                        disabled={!isAdmin}
-                                                        className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${isAssigned ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-300'}`}
-                                                    >
+                                                    <button type="button" onClick={() => togglePic(role)} disabled={!isAdmin} className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${isAssigned ? 'bg-slate-800 border-slate-800 text-white' : 'bg-white border-slate-300'}`}>
                                                         {isAssigned && <Check className="w-3 h-3" />}
                                                     </button>
                                                     <span className={`text-sm font-bold ${isAssigned ? 'text-slate-800' : 'text-slate-400'}`}>{role}</span>
                                                 </div>
-
-                                                {/* Completion Toggle (Only if Assigned) */}
                                                 {isAssigned && (
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => toggleCompletion(role)}
-                                                        disabled={!isAdmin}
-                                                        className={`px-3 py-1 text-xs rounded-full border transition-all ${isCompleted ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-slate-100 text-slate-500 border-slate-200'}`}
-                                                    >
+                                                    <button type="button" onClick={() => toggleCompletion(role)} disabled={!isAdmin} className={`px-3 py-1 text-xs rounded-full border transition-all ${isCompleted ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-slate-100 text-slate-500 border-slate-200'}`}>
                                                         {isCompleted ? 'Completed' : 'Mark Done'}
                                                     </button>
                                                 )}
@@ -841,44 +979,20 @@
                                 )}
                                 {isAdmin && (
                                     <div className="flex gap-2 mt-3 pt-2 border-t border-slate-200">
-                                        <input
-                                            type="text"
-                                            value={tempLink}
-                                            onChange={(e) => setTempLink(e.target.value)}
-                                            placeholder="Paste memo link here..."
-                                            className="flex-1 p-2 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-500 outline-none"
-                                            onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addLink())}
-                                        />
+                                        <input type="text" value={tempLink} onChange={(e) => setTempLink(e.target.value)} placeholder="Paste memo link here..." className="flex-1 p-2 text-xs border border-slate-300 rounded focus:ring-1 focus:ring-indigo-500 outline-none" onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addLink())} />
                                         <button type="button" onClick={addLink} className="p-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors"><Plus className="w-4 h-4" /></button>
                                     </div>
                                 )}
                             </div>
                             
                             {isAdmin && (
-                                <div className="flex gap-3 pt-4 border-t border-slate-100 mt-4 shrink-0">
+                                <div className="flex gap-3 pt-4 border-t border-slate-100 mt-4 shrink-0 flex-wrap">
                                     {task ? (
                                         <div className="flex gap-2 w-full">
-                                            {/* Specific Day Delete (Only if multi-day and not carried) */}
                                             {canRemoveDay && (
-                                                <button 
-                                                    type="button" 
-                                                    onClick={() => { if(confirm(`Remove only this specific day from the schedule?`)) onDelete(task.id, 'single'); }} 
-                                                    className="px-3 py-2 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg text-xs flex items-center gap-1 font-bold border border-red-100"
-                                                    title="Splits the task to remove this day"
-                                                >
-                                                    <Trash2 className="w-3 h-3" /> Remove Day
-                                                </button>
+                                                <button type="button" onClick={handleSingleDelete} className="px-3 py-2 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg text-xs flex items-center gap-1 font-bold border border-red-100" title="Splits the task to remove this day"><Trash2 className="w-3 h-3" /> Remove Day</button>
                                             )}
-                                            
-                                            {/* Full Delete */}
-                                            <button 
-                                                type="button" 
-                                                onClick={() => { if(confirm('Delete entire task and all its dates?')) onDelete(task.id, 'all'); }} 
-                                                className={`px-3 py-2 text-white bg-red-600 hover:bg-red-700 rounded-lg text-xs flex items-center gap-1 font-bold ${!canRemoveDay ? 'mr-auto' : ''}`}
-                                            >
-                                                <Trash2 className="w-3 h-3" /> Delete All
-                                            </button>
-
+                                            <button type="button" onClick={handleFullDelete} className={`px-3 py-2 text-white bg-red-600 hover:bg-red-700 rounded-lg text-xs flex items-center gap-1 font-bold ${!canRemoveDay ? 'mr-auto' : ''}`}><Trash2 className="w-3 h-3" /> Delete All</button>
                                             <div className="flex-1"></div>
                                             <button type="button" onClick={onClose} className="px-5 py-2 text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
                                             <button type="submit" className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold shadow-sm">Save</button>
@@ -892,6 +1006,12 @@
                                             </div>
                                         </div>
                                     )}
+                                </div>
+                            )}
+                            
+                            {task && task.timestamp && (
+                                <div className="text-[10px] text-slate-400 text-right mt-2 pt-2 border-t border-slate-100">
+                                    Last Updated: {new Date(task.timestamp).toLocaleString('en-MY', { hour12: true, dateStyle: 'medium', timeStyle: 'short' })}
                                 </div>
                             )}
                         </form>
