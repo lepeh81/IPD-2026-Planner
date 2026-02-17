@@ -80,6 +80,17 @@
         const getFirstDayOfMonth = (year, month) => new Date(year, month, 1).getDay();
         const formatDateKey = (year, month, day) => `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
         
+        const parseDate = (str) => {
+            const [y, m, d] = str.split('-').map(Number);
+            return new Date(y, m - 1, d);
+        };
+
+        const addDays = (dateStr, days) => {
+            const d = parseDate(dateStr);
+            d.setDate(d.getDate() + days);
+            return formatDateKey(d.getFullYear(), d.getMonth(), d.getDate());
+        };
+
         const getTodayKey = () => {
             const d = new Date();
             return formatDateKey(d.getFullYear(), d.getMonth(), d.getDate());
@@ -227,9 +238,10 @@
                 setIsTaskModalOpen(true);
             };
 
-            const handleTaskClick = (e, task) => {
+            const handleTaskClick = (e, task, dateKey) => {
                 e.stopPropagation();
                 setSelectedTask(task);
+                setSelectedDate(dateKey); // Capture the clicked date context for delete logic
                 setIsTaskModalOpen(true);
             };
 
@@ -262,7 +274,57 @@
             };
 
             const deleteTask = (id) => {
-                setTasks(prev => prev.filter(t => t.id !== id));
+                // Multi-day split logic
+                if (!selectedDate) {
+                    // Fallback to full delete if no context (shouldn't happen with updated click handler)
+                    setTasks(prev => prev.filter(t => t.id !== id));
+                    setIsTaskModalOpen(false);
+                    return;
+                }
+
+                setTasks(prev => {
+                    const taskIndex = prev.findIndex(t => t.id === id);
+                    if (taskIndex === -1) return prev;
+                    
+                    const task = prev[taskIndex];
+                    const dateToDelete = selectedDate;
+
+                    // Safety check: if clicking a carried forward task (on Today), just delete the whole task or handle as needed
+                    // Or if date clicked is outside range (e.g. slight sync issue), treat as full delete
+                    if (dateToDelete < task.startDate || dateToDelete > task.endDate) {
+                         return prev.filter(t => t.id !== id);
+                    }
+
+                    // Case 1: Single Day Task -> Delete
+                    if (task.startDate === task.endDate) {
+                        return prev.filter(t => t.id !== id);
+                    }
+
+                    // Case 2: Clicked Start Date -> Advance Start Date
+                    if (dateToDelete === task.startDate) {
+                        const newStart = addDays(task.startDate, 1);
+                        const updatedTask = { ...task, startDate: newStart };
+                        return [...prev.slice(0, taskIndex), updatedTask, ...prev.slice(taskIndex + 1)];
+                    }
+
+                    // Case 3: Clicked End Date -> Retract End Date
+                    if (dateToDelete === task.endDate) {
+                        const newEnd = addDays(task.endDate, -1);
+                        const updatedTask = { ...task, endDate: newEnd };
+                        return [...prev.slice(0, taskIndex), updatedTask, ...prev.slice(taskIndex + 1)];
+                    }
+
+                    // Case 4: Clicked Middle Date -> Split into Two Tasks
+                    const endA = addDays(dateToDelete, -1);
+                    const startB = addDays(dateToDelete, 1);
+                    
+                    const taskA = { ...task, endDate: endA };
+                    // Create new task B with new ID
+                    const taskB = { ...task, id: Date.now(), startDate: startB }; 
+
+                    return [...prev.slice(0, taskIndex), taskA, taskB, ...prev.slice(taskIndex + 1)];
+                });
+                
                 setIsTaskModalOpen(false);
             };
 
@@ -421,7 +483,7 @@
                                                     return (
                                                         <div 
                                                             key={task.id + (isCarried ? '-carried' : '')} 
-                                                            onClick={(e) => handleTaskClick(e, task)} 
+                                                            onClick={(e) => handleTaskClick(e, task, cell.dateKey)} 
                                                             className={`
                                                                 border p-2 rounded shadow-sm text-xs cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition-all relative overflow-hidden group/task
                                                                 ${barStyle}
