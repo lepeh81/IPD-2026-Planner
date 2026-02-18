@@ -32,6 +32,14 @@
         .no-print {
             display: block;
         }
+        /* Custom scrollbar for horizontal containers */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-800 antialiased overflow-hidden">
@@ -46,7 +54,7 @@
             ChevronLeft, ChevronRight, Lock, Unlock, BarChart3, 
             Paperclip, FileText, LogOut, ShieldCheck, Eye, Download, Link,
             CheckSquare, Square, ArrowRight, ExternalLink, Flag, PlayCircle, Check, AlertTriangle, CalendarDays,
-            Printer, FileDown, WifiOff, Wifi, Save, Database, Upload, FileJson, CloudOff, Info, HardDrive, FolderOpen, Share2, Camera, Cloud
+            Printer, FileDown, WifiOff, Wifi, Save, Database, Upload, FileJson, CloudOff, Info, HardDrive, FolderOpen, Share2, Camera, Cloud, RefreshCw
         } from 'https://esm.sh/lucide-react@0.292.0';
 
         // --- Constants ---
@@ -131,7 +139,7 @@
             const [searchQuery, setSearchQuery] = useState('');
 
             // --- Data Persistence (LocalStorage + Server Fetch) ---
-            const loadData = async () => {
+            const loadData = async (isManualRefresh = false) => {
                 // 1. Attempt to fetch 'planner_data.json' from the same directory (GitHub Repo)
                 try {
                     // Add timestamp to bypass caching so users always get the latest push
@@ -143,12 +151,16 @@
                             setDataSource('server');
                             // Update local storage to match server
                             localStorage.setItem('planner_2026_tasks', JSON.stringify(serverData));
+                            if (isManualRefresh) alert("✅ Data successfully refreshed from server!");
                             console.log("Sync: Loaded data from GitHub/Server file.");
                             return; 
                         }
+                    } else if (isManualRefresh) {
+                         alert("⚠️ Server file (planner_data.json) not found.");
                     }
                 } catch (e) {
                     console.log("No server data file found (planner_data.json). Using local storage.");
+                    if (isManualRefresh) alert("⚠️ Error connecting to server.");
                 }
 
                 // 2. Fallback to LocalStorage if server file missing
@@ -182,6 +194,12 @@
             const saveData = (newTasks) => {
                 setTasks(newTasks);
                 localStorage.setItem('planner_2026_tasks', JSON.stringify(newTasks));
+            };
+            
+            const handleManualRefresh = () => {
+                if (confirm("Refresh data from server?\n\nThis will overwrite local changes if a server file exists.")) {
+                    loadData(true);
+                }
             };
 
             useEffect(() => {
@@ -599,6 +617,18 @@
                                 <option value="All">All Team</option>
                                 {Object.keys(PIC_COLORS).filter(p => p !== 'Admin').map(p => <option key={p} value={p}>{p}</option>)}
                             </select>
+
+                            {/* Refresh Button */}
+                            <button onClick={handleManualRefresh} className="p-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-lg transition-colors" title="Refresh Data from Server">
+                                <RefreshCw className="w-4 h-4" />
+                            </button>
+                            
+                            {/* Save Button (Admin Only) */}
+                            {isAdmin && (
+                                <button onClick={handleExportData} className="p-2 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-lg transition-colors" title="Save / Export Session">
+                                    <Save className="w-4 h-4" />
+                                </button>
+                            )}
 
                             <button onClick={() => setIsDownloadModalOpen(true)} className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg transition-colors flex items-center gap-2" title="Download PDF Options"><FileDown className="w-4 h-4" /></button>
                             
